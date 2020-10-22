@@ -384,7 +384,9 @@ OUTERLOOP:
 			if err != nil {
 				return errors.WrapIfWithDetails(err, "could not delete broker", "id", broker.Labels["brokerId"])
 			}
-			err = r.Client.Delete(context.TODO(), &corev1.ConfigMap{ObjectMeta: templates.ObjectMeta(fmt.Sprintf(brokerConfigTemplate+"-%s", r.KafkaCluster.Name, broker.Labels["brokerId"]), LabelsForKafka(r.KafkaCluster.Name), r.KafkaCluster)})
+			log.Info("broker pod deleted", "brokerId",  broker.Labels["brokerId"], "pod", broker.GetName())
+			configMapName := fmt.Sprintf(brokerConfigTemplate+"-%s", r.KafkaCluster.Name, broker.Labels["brokerId"])
+			err = r.Client.Delete(context.TODO(), &corev1.ConfigMap{ObjectMeta: templates.ObjectMeta(configMapName, LabelsForKafka(r.KafkaCluster.Name), r.KafkaCluster)})
 			if err != nil {
 				if apierrors.IsNotFound(err) {
 					// can happen when broker was not fully initialized and now is deleted
@@ -392,21 +394,27 @@ OUTERLOOP:
 				} else {
 					return errors.WrapIfWithDetails(err, "could not delete configmap for broker", "id", broker.Labels["brokerId"])
 				}
+			} else {
+				log.V(1).Info("configMap for broker deleted", "configMap name", configMapName, "brokerId", broker.Labels["brokerId"])
 			}
 			if !r.KafkaCluster.Spec.HeadlessServiceEnabled {
-				err = r.Client.Delete(context.TODO(), &corev1.Service{ObjectMeta: templates.ObjectMeta(fmt.Sprintf("%s-%s", r.KafkaCluster.Name, broker.Labels["brokerId"]), LabelsForKafka(r.KafkaCluster.Name), r.KafkaCluster)})
+				serviceName := fmt.Sprintf("%s-%s", r.KafkaCluster.Name, broker.Labels["brokerId"])
+				err = r.Client.Delete(context.TODO(), &corev1.Service{ObjectMeta: templates.ObjectMeta(serviceName, LabelsForKafka(r.KafkaCluster.Name), r.KafkaCluster)})
 				if err != nil {
 					if apierrors.IsNotFound(err) {
 						// can happen when broker was not fully initialized and now is deleted
 						log.Info(fmt.Sprintf("Service for Broker %s not found. Continue", broker.Labels["brokerId"]))
 					}
 					return errors.WrapIfWithDetails(err, "could not delete service for broker", "id", broker.Labels["brokerId"])
+				} else {
+					log.V(1).Info("service for broker deleted", "service name", serviceName, "brokerId", broker.Labels["brokerId"])
 				}
 			}
 			for _, volume := range broker.Spec.Volumes {
 				if strings.HasPrefix(volume.Name, kafkaDataVolumeMount) {
+					pvcName := volume.PersistentVolumeClaim.ClaimName
 					err = r.Client.Delete(context.TODO(), &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{
-						Name:      volume.PersistentVolumeClaim.ClaimName,
+						Name:      pvcName,
 						Namespace: r.KafkaCluster.Namespace,
 					}})
 					if err != nil {
@@ -415,6 +423,8 @@ OUTERLOOP:
 							log.Info(fmt.Sprintf("PVC for Broker %s not found. Continue", broker.Labels["brokerId"]))
 						}
 						return errors.WrapIfWithDetails(err, "could not delete pvc for broker", "id", broker.Labels["brokerId"])
+					} else {
+						log.V(1).Info("pvc for broker deleted", "pvc name", pvcName, "brokerId", broker.Labels["brokerId"])
 					}
 				}
 			}
@@ -737,6 +747,7 @@ func (r *Reconciler) reconcileKafkaPod(log logr.Logger, desiredPod *corev1.Pod) 
 		if err != nil {
 			return errorfactory.New(errorfactory.APIFailure{}, err, "deleting resource failed", "kind", desiredType)
 		}
+		log.Info("broker pod deleted", "pod", currentPod.ObjectMeta.Name, "brokerId", currentPod.Labels["brokerId"], "hasTerminatedContainers", k8sutil.IsPodContainsTerminatedContainer(currentPod))
 	}
 	return nil
 
